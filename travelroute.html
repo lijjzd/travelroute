@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>无方框 | 平缓缩放 | 点击头像放大</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body, html, #map { width: 100%; height: 100%; font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif; }
+
+        /* ========== 关键：去掉地图图标默认的边框/背景/阴影 ========== */
+        .leaflet-marker-icon {
+            border: none !important;
+            background: transparent !important;
+            box-shadow: none !important;
+            outline: none !important;
+        }
+        /* 自定义图标容器彻底透明 */
+        .start-icon, .arrived-icon, .end-icon {
+            background: transparent !important;
+        }
+        /* 图片样式（保留白色边框圆环，但去掉其他） */
+        .avatar-img, .arrived-img, .end-img {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            object-fit: cover;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+            border: 2px solid white;
+            cursor: pointer;
+            background: transparent;
+        }
+        .end-img {
+            width: 56px;
+            height: 56px;
+            border: 3px solid white;
+        }
+        /* 控制按钮样式 */
+        .controls {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            z-index: 1000;
+            background: rgba(0,0,0,0.7);
+            backdrop-filter: blur(5px);
+            padding: 10px 20px;
+            border-radius: 40px;
+            display: flex;
+            gap: 15px;
+            pointer-events: auto;
+        }
+        button {
+            background: #ff6b6b;
+            border: none;
+            color: white;
+            padding: 6px 18px;
+            border-radius: 30px;
+            font-weight: bold;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        button:hover { background: #ff4c4c; }
+        .info-panel {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(0,0,0,0.65);
+            backdrop-filter: blur(4px);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 32px;
+            font-size: 14px;
+            z-index: 1000;
+            border-left: 4px solid #ff6b6b;
+        }
+        .legend {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(0,0,0,0.65);
+            backdrop-filter: blur(4px);
+            padding: 8px 14px;
+            border-radius: 16px;
+            color: #eee;
+            font-size: 12px;
+            z-index: 1000;
+            line-height: 1.5;
+            pointer-events: none;
+        }
+        @keyframes gentleBounce {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-6px); }
+        }
+        .bounce-animation {
+            animation: gentleBounce 0.6s ease-in-out infinite;
+        }
+        /* 模态框 */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 2000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.9);
+            backdrop-filter: blur(5px);
+            justify-content: center;
+            align-items: center;
+        }
+        .modal-content {
+            max-width: 90%;
+            max-height: 90%;
+            border-radius: 20px;
+            box-shadow: 0 0 30px rgba(0,0,0,0.5);
+            border: 4px solid white;
+        }
+        .close-modal {
+            position: absolute;
+            top: 20px;
+            right: 35px;
+            color: #fff;
+            font-size: 40px;
+            font-weight: bold;
+            cursor: pointer;
+            background: rgba(0,0,0,0.5);
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: 0.3s;
+        }
+        .close-modal:hover {
+            background: #ff6b6b;
+            transform: scale(1.1);
+        }
+    </style>
+</head>
+<body>
+    <div class="info-panel">✅ 无方框 | 平缓缩放 | 点击头像放大</div>
+    <div class="legend">
+        <div><span style="background: #2ecc71;"></span> 起点</div>
+        <div><span style="background: #e74c3c;"></span> 终点</div>
+        <div><span style="background: #f39c12;"></span> 到达后图标</div>
+        <div><span style="background: #3498db;"></span> 路线虚线</div>
+    </div>
+    <div class="controls">
+        <button id="startAnimate">▶ 开始汇聚动画</button>
+        <button id="resetAnimate" style="background:#555;">⟳ 重置</button>
+    </div>
+    <div id="map"></div>
+
+    <div id="imageModal" class="modal">
+        <span class="close-modal">&times;</span>
+        <img class="modal-content" id="modalImage">
+    </div>
+
+    <script>
+        (function() {
+            const xiAn = [34.3416, 108.9402];
+            const END_IMAGE_URL = './images/xianz.jpg';
+            const startPoints = [
+                { name: '兰州', coords: [36.0611, 103.8343], startUrl: './images/men1.jpg', arrivedUrl: './images/xian.jpg' },
+                { name: '广州', coords: [23.1291, 113.2644], startUrl: './images/women1.jpg', arrivedUrl: './images/xian.jpg' },
+                { name: '武汉', coords: [30.5928, 114.3055], startUrl: './images/men2.jpg', arrivedUrl: './images/xian.jpg' },
+                { name: '济南', coords: [36.6512, 117.1201], startUrl: './images/men4.jpg', arrivedUrl: './images/xian.jpg' },
+                { name: '天津', coords: [39.0842, 117.2009], startUrl: './images/men3.jpg', arrivedUrl: './images/xian.jpg' },
+                { name: '北京', coords: [39.9042, 116.4074], startUrl: './images/women2.jpg', arrivedUrl: './images/xian.jpg' }
+            ];
+
+            // 模态框
+            const modal = document.getElementById('imageModal');
+            const modalImg = document.getElementById('modalImage');
+            const closeModal = document.querySelector('.close-modal');
+            function showImage(url) { if(url) { modalImg.src = url; modal.style.display = 'flex'; } }
+            closeModal.onclick = () => modal.style.display = 'none';
+            window.onclick = (e) => { if(e.target === modal) modal.style.display = 'none'; };
+
+            function createStartIcon(url, name) {
+                return L.divIcon({
+                    html: `<img src="${url}" class="avatar-img" data-imgurl="${url}" data-name="${name}">`,
+                    iconSize: [48,48], iconAnchor: [24,24], popupAnchor: [0,-24],
+                    className: 'start-icon'
+                });
+            }
+            function createArrivedIcon(url, name) {
+                return L.divIcon({
+                    html: `<img src="${url}" class="arrived-img" data-imgurl="${url}" data-name="${name}">`,
+                    iconSize: [48,48], iconAnchor: [24,24], popupAnchor: [0,-24],
+                    className: 'arrived-icon'
+                });
+            }
+            function createEndIcon(url) {
+                return L.divIcon({
+                    html: `<img src="${url}" class="end-img" data-imgurl="${url}" data-name="西安">`,
+                    iconSize: [56,56], iconAnchor: [28,28], popupAnchor: [0,-28],
+                    className: 'end-icon'
+                });
+            }
+
+            function bindImageClick(marker) {
+                setTimeout(() => {
+                    const el = marker.getElement();
+                    if(el) {
+                        const img = el.querySelector('img');
+                        if(img && !img.hasClickListener) {
+                            img.hasClickListener = true;
+                            img.addEventListener('click', (e) => {
+                                e.stopPropagation();
+                                const url = img.getAttribute('data-imgurl');
+                                if(url) showImage(url);
+                            });
+                        }
+                    }
+                }, 10);
+            }
+
+            // 地图初始化（平缓缩放）
+            const map = L.map('map', {
+                minZoom: 4,
+                zoomSnap: 0.5,
+                zoomDelta: 0.5,
+                wheelPxPerZoomLevel: 60
+            });
+            L.tileLayer('https://webrd02.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}', {
+                attribution: '&copy; 高德地图',
+                maxZoom: 18
+            }).addTo(map);
+
+            const allPoints = [xiAn, ...startPoints.map(p => p.coords)];
+            map.fitBounds(L.latLngBounds(allPoints), { padding: [50, 50] });
+
+            // 终点
+            const endMarker = L.marker(xiAn, { icon: createEndIcon(END_IMAGE_URL) }).bindPopup('西安 · 终点').addTo(map);
+            bindImageClick(endMarker);
+            L.circleMarker(xiAn, { radius: 15, color: '#e74c3c', weight:2, fillColor:'#ff6b6b', fillOpacity:0.15 }).addTo(map);
+
+            let movingMarkers = [], animData = [];
+            startPoints.forEach(point => {
+                const marker = L.marker(point.coords, { icon: createStartIcon(point.startUrl, point.name) })
+                    .bindPopup(point.name).addTo(map);
+                movingMarkers.push(marker);
+                bindImageClick(marker);
+                L.polyline([point.coords, xiAn], { color: '#3498db', weight:2.5, opacity:0.65, dashArray:'8,8' }).addTo(map);
+                animData.push({
+                    marker, startCoords: point.coords, endCoords: xiAn, duration:3500, isAnimating:false,
+                    arrivedIconUrl: point.arrivedUrl, originalStartUrl: point.startUrl, name: point.name
+                });
+            });
+
+            function setBounce(enable) {
+                movingMarkers.forEach(m => {
+                    const el = m.getElement();
+                    if(el && el.querySelector('img')) {
+                        const img = el.querySelector('img');
+                        enable ? img.classList.add('bounce-animation') : img.classList.remove('bounce-animation');
+                    }
+                });
+            }
+            setBounce(true);
+
+            let animFrame=null, isRunning=false, startTimestamp=null;
+            function interpolate(s,e,t){ return [s[0]+(e[0]-s[0])*t, s[1]+(e[1]-s[1])*t]; }
+            function animate(now){
+                if(!isRunning) return;
+                if(!startTimestamp){ startTimestamp=now; animData.forEach(a=>a.isAnimating=true); animFrame=requestAnimationFrame(animate); return; }
+                let allDone=true;
+                const elapsed=now-startTimestamp;
+                animData.forEach(a=>{
+                    if(!a.isAnimating) return;
+                    const t=Math.min(1, elapsed/a.duration);
+                    if(t>=1){
+                        a.marker.setLatLng(a.endCoords);
+                        a.marker.setIcon(createArrivedIcon(a.arrivedIconUrl, a.name));
+                        bindImageClick(a.marker);
+                        a.isAnimating=false;
+                    }else{
+                        allDone=false;
+                        a.marker.setLatLng(interpolate(a.startCoords, a.endCoords, t));
+                    }
+                });
+                if(allDone){
+                    cancelAnimationFrame(animFrame); animFrame=null; isRunning=false; startTimestamp=null;
+                    const infoDiv=document.querySelector('.info-panel');
+                    if(infoDiv) infoDiv.style.background="rgba(46,204,113,0.8)";
+                    setTimeout(()=>{ if(infoDiv) infoDiv.style.background="rgba(0,0,0,0.65)"; },1500);
+                }else{
+                    animFrame=requestAnimationFrame(animate);
+                }
+            }
+            function startAnim(){
+                if(isRunning) resetAnim();
+                setBounce(false);
+                animData.forEach(a=>{
+                    a.marker.setLatLng(a.startCoords);
+                    a.marker.setIcon(createStartIcon(a.originalStartUrl, a.name));
+                    bindImageClick(a.marker);
+                    a.isAnimating=false;
+                });
+                isRunning=true; startTimestamp=null; animFrame=requestAnimationFrame(animate);
+            }
+            function resetAnim(){
+                if(animFrame) cancelAnimationFrame(animFrame);
+                isRunning=false; startTimestamp=null;
+                animData.forEach(a=>{
+                    a.marker.setLatLng(a.startCoords);
+                    a.marker.setIcon(createStartIcon(a.originalStartUrl, a.name));
+                    bindImageClick(a.marker);
+                    a.isAnimating=false;
+                });
+                setBounce(true);
+                const infoDiv=document.querySelector('.info-panel');
+                if(infoDiv) infoDiv.style.background="rgba(0,0,0,0.65)";
+            }
+            document.getElementById('startAnimate').onclick=startAnim;
+            document.getElementById('resetAnimate').onclick=resetAnim;
+        })();
+    </script>
+</body>
+</html>
